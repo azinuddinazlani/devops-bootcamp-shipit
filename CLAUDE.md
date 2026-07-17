@@ -64,33 +64,33 @@ already did `docker build` + ECR by hand in the AWS sessions — S4 *automates t
 The one integration point. Keep it stable; slides and the reference workflows depend on it.
 
 - **Identity** = the learner's GitHub username (`${{ github.actor }}`), used as `callsign`.
-- **Config** the board needs comes from the learner's `ship.config.json`: `color` (hex **or** a
-  named-palette colour; sets the ship's hue — every saturated texel takes that hue; greys/blacks stay
-  neutral — and drives the UI accent) and `shipModel` (which of the 4 ships the board renders in
-  orbit); `shipName` is a cosmetic label, not identity.
+- **Config:** `ship.config.json` drives the learner's *site*; the *board* only sees what the report
+  step sends. The taught step hardcodes the learner's colour in the JSON body and omits `shipModel`
+  — so taught ships all render the default model, hue-set by `color` (hex or a named-palette colour;
+  board normalizes, greys/blacks stay neutral). `shipName` is cosmetic, never identity.
 - **Transport:** a workflow step POSTs one event per stage it reports. The taught form (CI/CD 3
   slides) is a **single liftoff report** after the Pages deploy; extra beats (pad, abort-on-failure)
   are optional operator flourishes, never required of learners.
+
+The taught report (CI/CD 3 slide 14, quoted verbatim — the whole wire contract learners meet):
 
 ```
 POST  $BOARD_URL/api/event
 Authorization: Bearer $SHIPIT_TOKEN
 Content-Type: application/json
 
-{
-  "callsign": "octocat",          // GitHub username
-  "stage":    "build",            // pad | build | test | clearance | liftoff
-  "status":   "passed",           // running | passed | failed | aborted | shipped
-  "color":    "#22d3ee",          // hex or a colour name (e.g. "red"); board normalizes → hex, sets the ship's hue
-  "shipModel":"fighter",          // from ship.config.json: fighter · interceptor · hauler · scout
-  "version":  "v3",               // optional; image/site tag (for rollback demo)
-  "siteUrl":  "https://…"         // optional; the live deployed site to link from orbit
-}
+{ "callsign": "octocat", "stage": "liftoff", "status": "shipped", "color": "#22d3ee" }
 ```
 
-- **Minimal payload:** only `callsign` + a known `stage`/`status` are required — the board defaults
-  `color`/`shipModel` when absent or invalid (`board/src/room.js`). Slides have learners hardcode
-  their own colour in the JSON body (no config-extraction plumbing in the workflow).
+- **Board accepts more than the slides teach** (operator flourishes only, never asked of learners):
+  `stage` ∈ `pad | build | test | clearance | liftoff`, `status` ∈ `running | passed | failed |
+  aborted | shipped`, plus optional `shipModel` (`fighter · interceptor · hauler · scout`),
+  `version`, `siteUrl`. Required: just `callsign` + a known `stage`/`status` (see
+  `board/src/room.js`).
+- **The taught `curl` deliberately has NO `-f` flag:** on a 401 the step stays green and the run log
+  prints `{"error":"unauthorized"}` — CI/CD 3 Amali 3 (wrong-token proof) depends on exactly this.
+  Do not "harden" it to `curl -fsS` in slides or reference branches.
+
 - `$BOARD_URL` is a **public** repo/environment **variable**.
 - `$SHIPIT_TOKEN` is the **secret** taught in CI/CD 3 — a ship with no/late token can't report to
   Mission Control (the "unauthorized" lesson). Do NOT accept unauthenticated events in prod mode.
@@ -110,18 +110,77 @@ Frozen — slides quote these verbatim.
     (recolours the ship — sets its hue to `color`; every saturated texel takes that hue, greys/blacks
     stay neutral — and drives the UI accent) · `shipModel` ∈ `fighter · interceptor · hauler · scout` · `emblem` ∈
     `comet · bolt · star · ring · delta · phoenix`. `callsign` is **not** in config — it's the GitHub
-    username, injected via `VITE_CALLSIGN` at build.
+    username. On the board it comes from `${{ github.actor }}` in the report step. The site *can*
+    display it via `VITE_CALLSIGN` at build, but **the taught workflow never sets it** — the app
+    falls back to empty (`launchpad/src/main.js`); don't assume the microsite shows a callsign.
   - The ship is one of four low-poly spaceships (Quaternius, CC0), hue-set by `color`; the site and
     board both render whichever `shipModel` the learner picked.
-- **The S2 fitness gate** is a config **validation** check (not a unit test): `npm test` →
+- **The S2 fitness gate** is a config **validation** check (not a unit test): taught as
+  `npm run test` (in `launchpad/`, via the workflow's `defaults.run.working-directory`) →
   `node scripts/preflight.mjs` validates `ship.config.json` and **exits non-zero (ABORT)** on a bad
   config (unparseable, bad hex, unknown emblem, over-long name). Teaches the *exit-code gate* (a
   DevOps skill), not test authoring (a developer skill).
-- **The slides are the source of truth for the workflow** — learners build `deploy.yml` from the
+- **The slides are the source of truth for the workflow** — learners build `deploy.yaml` from the
   building blocks on the slides, nothing else. The authored answer keys (`starter/workflows/`) were
   retired 2026-07-17: learners shipped a simpler file than they prescribed, and the extra plumbing
   (config extraction via `jq`, pad/abort beats, `env:` indirection) never earned its place. A
   session's reference state is *derived* by running its amali on a test fork (see Distribution).
+
+**Taught workflow — end of S3.** Snapshot derived from the delivered decks 2026-07-17, NOT a spec —
+regenerate from the slides if in doubt. Filename is `.github/workflows/deploy.yaml` (set in CI/CD 1:
+`.yaml`, not `.yml`); `permissions` sits at the bottom because that's where CI/CD 1 adds it; S1's
+`workflow_dispatch` was dropped when S3 rewrote `on:`; each learner's `color` is their own value
+(`#22d3ee` = the slide example):
+
+```yaml
+name: deploy
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+defaults:
+  run:
+    working-directory: launchpad
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+      - run: npm clean-install
+      - run: npm run test
+
+  deploy:
+    needs: test
+    if: github.event_name == 'push'
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+      - run: npm clean-install
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: launchpad/dist
+      - uses: actions/deploy-pages@v5
+      - name: Lapor ke papan
+        run: >
+          curl -X POST ${{ vars.BOARD_URL }}/api/event
+          -H "Authorization: Bearer ${{ secrets.SHIPIT_TOKEN }}"
+          -H "Content-Type: application/json"
+          -d '{"callsign":"${{ github.actor }}","stage":"liftoff","status":"shipped","color":"#22d3ee"}'
+
+permissions:
+  pages: write
+  id-token: write
+```
+
+No `contents: read` — checkout still works because learner forks are public. The deploy job binds
+`environment: production` (a learner-created environment with Required reviewers), NOT the
+conventional `github-pages` environment. S4 extends this file; it must not restructure it.
 - **Per-session commands** (kelas-taip-bersama): fork → author `deploy.yml` step-by-step per session →
   `git push` → watch. Full list in the spec §7.
 - **Slides drift note:** the bootcamp slides repo (`~/repo/slides-devops-bootcamp`) quotes the two
@@ -151,7 +210,7 @@ Frozen — slides quote these verbatim.
 
 ## Bootcamp integration (context; the arc itself lives in the slides repo)
 
-`~/repo/slides-devops-bootcamp` → `outlines/2026/cicd1..4.md` + `slides/2026/cicd1..4/`. The
+`~/repo/slides-devops-bootcamp` → `outlines/2026/ci-cd1..4.md` + `slides/2026/ci-cd1..4/`. The
 `$SHIPIT_TOKEN` is the CI/CD 3 secret; the **S4 deploy has the learner's pipeline build the `board`
 image, push it to their GHCR, and deploy it to their own EC2 (from AWS 2) via SSM** — with a
 rollback demo (redeploy the previous tag) as stretch. The instructor's shared board runs on
